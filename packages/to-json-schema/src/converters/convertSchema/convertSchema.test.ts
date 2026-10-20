@@ -1791,6 +1791,153 @@ describe('convertSchema', () => {
       });
     });
 
+    test('should keep oneOf for disjoint undefinedable discriminators', () => {
+      expect(
+        convertSchema(
+          {},
+          v.variant('type', [
+            v.object({
+              type: v.undefinedable(v.literal('dog')),
+              name: v.string(),
+            }),
+            v.object({
+              type: v.undefinedable(v.literal('cat')),
+              indoor: v.boolean(),
+            }),
+          ]),
+          undefined,
+          createContext()
+        )
+      ).toStrictEqual({
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'dog' },
+              name: { type: 'string' },
+            },
+            required: ['type', 'name'],
+          },
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'cat' },
+              indoor: { type: 'boolean' },
+            },
+            required: ['type', 'indoor'],
+          },
+        ],
+      });
+    });
+
+    test('should keep oneOf when optional is nested in a required union', () => {
+      expect(
+        convertSchema(
+          {},
+          v.variant('type', [
+            v.object({
+              type: v.union([v.optional(v.literal('dog')), v.literal('wolf')]),
+              name: v.string(),
+            }),
+            v.object({
+              type: v.union([v.optional(v.literal('cat')), v.literal('tiger')]),
+              indoor: v.boolean(),
+            }),
+          ]),
+          undefined,
+          createContext()
+        )
+      ).toStrictEqual({
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              type: { anyOf: [{ const: 'dog' }, { const: 'wolf' }] },
+              name: { type: 'string' },
+            },
+            required: ['type', 'name'],
+          },
+          {
+            type: 'object',
+            properties: {
+              type: { anyOf: [{ const: 'cat' }, { const: 'tiger' }] },
+              indoor: { type: 'boolean' },
+            },
+            required: ['type', 'indoor'],
+          },
+        ],
+      });
+    });
+
+    test('should convert optional discriminators that can both be omitted as anyOf', () => {
+      expect(
+        convertSchema(
+          {},
+          v.variant('type', [
+            v.object({ type: v.optional(v.literal('dog')), name: v.string() }),
+            v.object({
+              type: v.optional(v.literal('cat')),
+              indoor: v.boolean(),
+            }),
+          ]),
+          undefined,
+          createContext()
+        )
+      ).toStrictEqual({
+        anyOf: [
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'dog' },
+              name: { type: 'string' },
+            },
+            required: ['name'],
+          },
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'cat' },
+              indoor: { type: 'boolean' },
+            },
+            required: ['indoor'],
+          },
+        ],
+      });
+    });
+
+    test('should keep oneOf for a null discriminator and a literal', () => {
+      expect(
+        convertSchema(
+          {},
+          v.variant('type', [
+            v.object({ type: v.null(), name: v.string() }),
+            v.object({ type: v.literal('dog'), breed: v.string() }),
+          ]),
+          undefined,
+          createContext()
+        )
+      ).toStrictEqual({
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              type: { type: 'null' },
+              name: { type: 'string' },
+            },
+            required: ['type', 'name'],
+          },
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'dog' },
+              breed: { type: 'string' },
+            },
+            required: ['type', 'breed'],
+          },
+        ],
+      });
+    });
+
     test('should convert a nested variant that shares a discriminator as anyOf', () => {
       expect(
         convertSchema(

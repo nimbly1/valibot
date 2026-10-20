@@ -155,68 +155,102 @@ const OBJECT_SCHEMA_TYPES: ReadonlySet<string> = new Set([
 /**
  * Reads the finite JSON values accepted by a discriminator schema.
  *
+ * A missing object key is not one of these values. Only an `optional`,
+ * `exact_optional`, or `nullish` object entry accepts an absent key.
+ *
  * @param schema The discriminator schema.
  *
- * @returns The values that schema accepts.
+ * @returns The values that schema accepts, or `null` when the set is open.
  */
-function finiteDiscriminatorValues(schema: VariantShape): DiscriminatorValues {
+function finiteDiscriminatorValues(
+  schema: VariantShape
+): ReadonlySet<unknown> | null {
   if (
     schema.type === 'exact_optional' ||
-    schema.type === 'nullish' ||
     schema.type === 'optional' ||
     schema.type === 'undefinedable'
   ) {
-    const wrapped = schema.wrapped
-      ? finiteDiscriminatorValues(schema.wrapped)
-      : { values: null, acceptsAbsence: false };
-    if (schema.type !== 'nullish' || !wrapped.values) {
-      return { values: wrapped.values, acceptsAbsence: true };
-    }
-    return {
-      values: new Set([...wrapped.values, null]),
-      acceptsAbsence: true,
-    };
+    return schema.wrapped ? finiteDiscriminatorValues(schema.wrapped) : null;
   }
 
-  if (schema.type === 'nullable') {
+  if (schema.type === 'nullable' || schema.type === 'nullish') {
     const wrapped = schema.wrapped
       ? finiteDiscriminatorValues(schema.wrapped)
-      : { values: null, acceptsAbsence: false };
-    if (!wrapped.values) {
-      return wrapped;
+      : null;
+    if (!wrapped) {
+      return null;
     }
-    return {
-      values: new Set([...wrapped.values, null]),
-      acceptsAbsence: wrapped.acceptsAbsence,
-    };
+    return new Set([...wrapped, null]);
+  }
+
+  if (schema.type === 'null') {
+    return new Set([null]);
   }
 
   if (schema.type === 'literal') {
-    return isJsonConstValue(schema.literal)
-      ? { values: new Set([schema.literal]), acceptsAbsence: false }
-      : { values: null, acceptsAbsence: false };
+    return isJsonConstValue(schema.literal) ? new Set([schema.literal]) : null;
   }
 
   if (schema.type === 'enum' || schema.type === 'picklist') {
     const values = new Set<unknown>();
     for (const option of schema.options ?? []) {
       if (!isJsonConstValue(option)) {
-        return { values: null, acceptsAbsence: false };
+        return null;
       }
       values.add(option);
     }
-    return { values, acceptsAbsence: false };
+    return values;
   }
 
   if (schema.type === 'union') {
-    return unionDiscriminatorValues(
-      (schema.options ?? []).map((option) =>
-        finiteDiscriminatorValues(option as VariantShape)
-      )
-    );
+    const values = new Set<unknown>();
+    for (const option of schema.options ?? []) {
+      const inner = finiteDiscriminatorValues(option as VariantShape);
+      if (!inner) {
+        return null;
+      }
+      for (const value of inner) {
+        values.add(value);
+      }
+    }
+    return values;
   }
 
-  return { values: null, acceptsAbsence: false };
+  return null;
+}
+
+/**
+ * Reads one object entry, including whether that entry may be omitted.
+ *
+ * @param entry The object entry schema.
+ *
+ * @returns The discriminator values for that entry.
+ */
+function objectEntryDiscriminator(entry: VariantShape): DiscriminatorValues {
+  if (entry.type === 'exact_optional' || entry.type === 'optional') {
+    return {
+      values: entry.wrapped ? finiteDiscriminatorValues(entry.wrapped) : null,
+      acceptsAbsence: true,
+    };
+  }
+
+  if (entry.type === 'nullish') {
+    const wrapped = entry.wrapped
+      ? finiteDiscriminatorValues(entry.wrapped)
+      : null;
+    if (!wrapped) {
+      return { values: null, acceptsAbsence: true };
+    }
+    return {
+      values: new Set([...wrapped, null]),
+      acceptsAbsence: true,
+    };
+  }
+
+  return {
+    values: finiteDiscriminatorValues(entry),
+    acceptsAbsence: false,
+  };
 }
 
 /**
@@ -271,13 +305,14 @@ function optionDiscriminatorValues(
 
   if (OBJECT_SCHEMA_TYPES.has(option.type)) {
     const entry =
-      option.entries && Object.hasOwn(option.entries, key)
+      option.entries &&
+      Object.prototype.hasOwnProperty.call(option.entries, key)
         ? option.entries[key]
         : undefined;
     if (!entry) {
       return { values: null, acceptsAbsence: true };
     }
-    return finiteDiscriminatorValues(entry);
+    return objectEntryDiscriminator(entry);
   }
 
   return { values: null, acceptsAbsence: false };
